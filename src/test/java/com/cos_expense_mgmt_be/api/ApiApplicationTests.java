@@ -1,0 +1,14 @@
+package com.tem.be.api;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+
+@SpringBootTest
+class ApiApplicationTests {
+
+	@Test
+	void contextLoads() {
+        // load contexts
+	}
+
+}
