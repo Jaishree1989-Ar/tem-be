@@ -26,7 +26,7 @@ public class AccountDepartmentMapping {
     @Column(name = "mapping_id")
     private Long id;
 
-    @Column(name = "foundation_account_number", nullable = false)
+    @Column(name = "foundation_account_number")
     private String foundationAccountNumber;
 
     @Column(name = "department_account_number", nullable = false)

@@ -5,6 +5,7 @@ import com.tem.be.api.dao.inventory.TempFirstNetInventoryDao;
 import com.tem.be.api.model.FirstNetInventory;
 import com.tem.be.api.model.InventoryHistory;
 import com.tem.be.api.model.TempFirstNetInventory;
+import com.tem.be.api.utils.CarrierConstants;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -26,7 +27,7 @@ public class FirstNetInventoryApprovalStrategy implements InventoryApprovalStrat
 
     @Override
     public String getProviderName() {
-        return "FirstNet"; // Matches the provider name in the database
+        return CarrierConstants.FIRSTNET;
     }
 
     @Override

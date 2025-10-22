@@ -3,6 +3,7 @@ package com.tem.be.api.utils;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
+
 import java.io.IOException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -26,7 +27,7 @@ public class MultiDateDeserializer extends JsonDeserializer<Date> {
     @Override
     public Date deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
         String dateString = p.getText();
-        if (dateString == null || dateString.trim().isEmpty()) {
+        if (dateString == null || dateString.trim().isEmpty() || dateString.equalsIgnoreCase("No Date")) {
             return null;
         }
 

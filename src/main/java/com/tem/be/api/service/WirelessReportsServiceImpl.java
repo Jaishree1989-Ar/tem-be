@@ -2,6 +2,7 @@ package com.tem.be.api.service;
 
 import com.tem.be.api.dao.ATTInvoiceDao;
 import com.tem.be.api.dao.FirstNetInvoiceDao;
+import com.tem.be.api.dao.VerizonWirelessInvoiceDao;
 import com.tem.be.api.dao.WirelessReportsDao;
 import com.tem.be.api.dto.dashboard.*;
 import com.tem.be.api.dto.ReportUpdateDTO;
@@ -9,7 +10,7 @@ import com.tem.be.api.dto.TotalByCarrierDTO;
 import com.tem.be.api.dto.TotalByDepartmentDTO;
 import com.tem.be.api.exception.ResourceNotFoundException;
 import com.tem.be.api.model.WirelessReports;
-import com.tem.be.api.utils.NetworkProvider;
+import com.tem.be.api.utils.CarrierConstants;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -17,8 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.*;
-
-import static com.tem.be.api.utils.NetworkProvider.FIRSTNET;
 
 /**
  * Service for wireless reports related operations.
@@ -31,12 +30,17 @@ public class WirelessReportsServiceImpl implements WirelessReportsService {
     private final WirelessReportsDao wirelessReportsDao;
     private final FirstNetInvoiceDao firstNetInvoiceDao;
     private final ATTInvoiceDao aTTInvoiceDao;
+    private final VerizonWirelessInvoiceDao verizonWirelessInvoiceDao;
 
     @Autowired
-    public WirelessReportsServiceImpl(WirelessReportsDao wirelessReportsDao, FirstNetInvoiceDao firstNetInvoiceDao, ATTInvoiceDao aTTInvoiceDao) {
+    public WirelessReportsServiceImpl(WirelessReportsDao wirelessReportsDao,
+                                      FirstNetInvoiceDao firstNetInvoiceDao,
+                                      ATTInvoiceDao aTTInvoiceDao,
+                                      VerizonWirelessInvoiceDao verizonWirelessInvoiceDao) {
         this.wirelessReportsDao = wirelessReportsDao;
         this.firstNetInvoiceDao = firstNetInvoiceDao;
         this.aTTInvoiceDao = aTTInvoiceDao;
+        this.verizonWirelessInvoiceDao = verizonWirelessInvoiceDao;
     }
 
     @Override
@@ -187,52 +191,24 @@ public class WirelessReportsServiceImpl implements WirelessReportsService {
     public List<DepartmentExpenseDTO> getExpenseSummaryByCarrier(String carrier, Date startDate, Date endDate) {
         log.info("Starting expense summary generation for carrier: {}, from: {} to: {}", carrier, startDate, endDate);
 
-        // 1. Identify the provider using your helper method
-        NetworkProvider provider = identifyProvider(carrier);
-
-        // 2. Use a modern 'switch' expression on the enum to fetch data
-        List<Object[]> rawData = switch (provider) {
-            case FIRSTNET -> firstNetInvoiceDao.findExpenseSummaryByDateRange(startDate, endDate);
-            case ATT -> aTTInvoiceDao.findExpenseSummaryByDateRange(startDate, endDate);
-            case VERIZON -> Collections.emptyList();
-            case UNKNOWN -> throw new IllegalArgumentException("Unsupported or unknown carrier specified: " + carrier);
+        List<Object[]> rawData = switch (carrier.toLowerCase()) {
+            case CarrierConstants.FIRSTNET_LC -> firstNetInvoiceDao.findExpenseSummaryByDateRange(startDate, endDate);
+            case CarrierConstants.ATT_LC -> aTTInvoiceDao.findExpenseSummaryByDateRange(startDate, endDate);
+            case CarrierConstants.VERIZON_WIRELESS_LC ->
+                    verizonWirelessInvoiceDao.findExpenseSummaryByDateRange(startDate, endDate);
+            default -> throw new IllegalArgumentException("Unsupported or unknown carrier: " + carrier);
         };
 
-        log.info("Fetched {} raw records from the database for provider: {}", rawData.size(), provider);
-
-        // 3. Process the retrieved data (this method is already well-written)
+        log.info("Fetched {} raw records from the database for carrier: {}", rawData.size(), carrier);
         return processRawExpenseData(rawData);
     }
 
     /**
-     * Identifies the {@link NetworkProvider} enum from a raw carrier string.
-     * This method is case-insensitive.
-     *
-     * @param carrier The raw carrier name string (e.g., "firstnet", "AT&T").
-     * @return The corresponding {@link NetworkProvider} enum, or {@code UNKNOWN} if no match is found.
-     */
-    private NetworkProvider identifyProvider(String carrier) {
-        if (carrier == null || carrier.isBlank()) {
-            return NetworkProvider.UNKNOWN;
-        }
-        String lowerCaseCarrier = carrier.toLowerCase();
-        if (lowerCaseCarrier.contains("firstnet")) {
-            return NetworkProvider.FIRSTNET;
-        } else if (lowerCaseCarrier.contains("at&t mobility")) {
-            return NetworkProvider.ATT;
-        } else if (lowerCaseCarrier.contains("verizon")) {
-            return NetworkProvider.VERIZON;
-        }
-        return NetworkProvider.UNKNOWN;
-    }
-
-    /**
-     * Processes raw data from a native SQL query into a structured list of {@link DepartmentExpenseDTO}s.
-     * This method groups invoice records by department, cleans and parses currency strings, calculates
+     * Processes raw data from a database query into a structured list of {@link DepartmentExpenseDTO}s.
+     * This method groups invoice records by department, delegates charge parsing, calculates
      * the total for each department, and formats the final output.
      *
-     * @param rawData A list of {@code Object[]} where each array represents a row from the database,
-     *                expected to contain [department, wireless_number, total_current_charges].
+     * @param rawData A list of {@code Object[]} where each array represents a row from the database.
      * @return A structured list of {@link DepartmentExpenseDTO}s ready for the API response.
      */
     private List<DepartmentExpenseDTO> processRawExpenseData(List<Object[]> rawData) {
@@ -243,26 +219,14 @@ public class WirelessReportsServiceImpl implements WirelessReportsService {
             String department = (String) row[0];
             String userName = (String) row[1];
             String wirelessNumber = (String) row[2];
-            String totalChargesStr = (String) row[3];
+            Object chargesObject = row[3];
 
-            if (department == null || wirelessNumber == null || totalChargesStr == null) {
-                log.warn("Skipping incomplete record: [dept={}, num={}, charges={}]", department, wirelessNumber, totalChargesStr);
+            if (department == null || wirelessNumber == null) {
+                log.warn("Skipping record with null department or wireless number.");
                 continue;
             }
 
-            BigDecimal total;
-            try {
-                // Clean the string by removing any non-digit and non-decimal point characters (e.g., '$', ',')
-                String cleanedTotalStr = totalChargesStr.replaceAll("[^\\d.]", "");
-                if (cleanedTotalStr.isEmpty()) {
-                    total = BigDecimal.ZERO;
-                } else {
-                    total = new BigDecimal(cleanedTotalStr);
-                }
-            } catch (NumberFormatException e) {
-                log.error("Could not parse total_current_charges '{}' for wireless number {}. Defaulting to ZERO.", totalChargesStr, wirelessNumber, e);
-                total = BigDecimal.ZERO;
-            }
+            BigDecimal total = parseChargeValue(chargesObject, wirelessNumber);
 
             ExpenseInvoiceDTO invoiceDTO = new ExpenseInvoiceDTO(userName, wirelessNumber, total);
 
@@ -276,5 +240,39 @@ public class WirelessReportsServiceImpl implements WirelessReportsService {
 
         log.debug("Finished processing. Created {} department DTOs.", departmentMap.size());
         return new ArrayList<>(departmentMap.values());
+    }
+
+
+    /**
+     * Parses a charge value from a raw object, handling different data types (BigDecimal, String).
+     *
+     * @param chargesObject The object containing the charge value, which could be null.
+     * @param identifier    A unique identifier (like a wireless number) for logging purposes.
+     * @return The parsed BigDecimal value, or BigDecimal.ZERO if parsing fails or input is invalid.
+     */
+    private BigDecimal parseChargeValue(Object chargesObject, String identifier) {
+        if (chargesObject == null) {
+            return BigDecimal.ZERO;
+        }
+
+        if (chargesObject instanceof BigDecimal totalCharges) {
+            return totalCharges;
+        }
+
+        if (chargesObject instanceof String totalChargesStr) {
+            try {
+                String cleanedTotalStr = totalChargesStr.replaceAll("[^\\d.-]", "");
+                if (cleanedTotalStr.isEmpty() || cleanedTotalStr.equals("-")) {
+                    return BigDecimal.ZERO;
+                }
+                return new BigDecimal(cleanedTotalStr);
+            } catch (NumberFormatException e) {
+                log.error("Could not parse total_current_charges string '{}' for identifier {}. Defaulting to ZERO.", totalChargesStr, identifier, e);
+                return BigDecimal.ZERO;
+            }
+        }
+
+        log.warn("Unexpected data type '{}' for charges for identifier {}. Defaulting to ZERO.", chargesObject.getClass().getName(), identifier);
+        return BigDecimal.ZERO;
     }
 }

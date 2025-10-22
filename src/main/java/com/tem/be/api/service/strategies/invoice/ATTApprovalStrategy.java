@@ -5,28 +5,24 @@ import com.tem.be.api.dao.TempATTInvoiceDao;
 import com.tem.be.api.model.ATTInvoice;
 import com.tem.be.api.model.InvoiceHistory;
 import com.tem.be.api.model.TempATTInvoice;
+import com.tem.be.api.utils.CarrierConstants;
+import lombok.AllArgsConstructor;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 @Component
+@AllArgsConstructor
 public class ATTApprovalStrategy implements ApprovalStrategy {
 
     private final TempATTInvoiceDao tempRepo;
     private final ATTInvoiceDao finalRepo;
 
-    @Autowired
-    public ATTApprovalStrategy(TempATTInvoiceDao tempRepo, ATTInvoiceDao finalRepo) {
-        this.tempRepo = tempRepo;
-        this.finalRepo = finalRepo;
-    }
-
     @Override
     public String getProviderName() {
-        return "AT&T Mobility";
+        return CarrierConstants.ATT;
     }
 
     @Override

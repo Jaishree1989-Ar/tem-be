@@ -6,13 +6,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
-import org.springframework.format.annotation.DateTimeFormat;
 
 import javax.persistence.*;
 import java.math.BigDecimal;
-import java.sql.Timestamp;
 import java.util.Date;
 
 /**
@@ -35,16 +31,6 @@ public class FirstNetInvoice implements Invoiceable {
     @JoinColumn(name = "invoice_history_id")
     @JsonIgnore
     private InvoiceHistory invoiceHistory;
-
-    @CreationTimestamp
-    @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-    @Column(name = "created_at", updatable = false)
-    private Timestamp createdAt;
-
-    @UpdateTimestamp
-    @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-    @Column(name = "updated_at")
-    private Timestamp updatedAt;
 
     @Column(name = "invoice_number")
     private String invoiceNumber;

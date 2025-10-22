@@ -5,6 +5,7 @@ import com.tem.be.api.dao.inventory.TempATTInventoryDao;
 import com.tem.be.api.model.ATTInventory;
 import com.tem.be.api.model.InventoryHistory;
 import com.tem.be.api.model.TempATTInventory;
+import com.tem.be.api.utils.CarrierConstants;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -26,7 +27,7 @@ public class ATTInventoryApprovalStrategy implements InventoryApprovalStrategy {
 
     @Override
     public String getProviderName() {
-        return "AT&T Mobility"; // Or whatever name is used to identify this provider
+        return CarrierConstants.ATT;
     }
 
     @Override

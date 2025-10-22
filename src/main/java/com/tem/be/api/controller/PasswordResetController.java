@@ -3,7 +3,6 @@ package com.tem.be.api.controller;
 import com.tem.be.api.dto.ForgotPasswordRequest;
 import com.tem.be.api.dto.ResetPasswordRequest;
 import com.tem.be.api.service.PasswordResetService;
-import com.tem.be.api.service.UserService;
 import com.tem.be.api.utils.ApiResponse;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,33 +19,27 @@ import javax.validation.Valid;
 public class PasswordResetController {
 
     private final PasswordResetService passwordResetService;
-    private final UserService userService;
 
     @Autowired
-    public PasswordResetController(PasswordResetService passwordResetService, UserService userService) {
+    public PasswordResetController(PasswordResetService passwordResetService) {
         this.passwordResetService = passwordResetService;
-        this.userService = userService;
     }
 
     /**
-     * Forgot password method
-     * Inputs : email
-     * @param request
-     * @return
+     * Handles the request to initiate a password reset.
+     * @param request The request containing the user's email.
+     * @return A response entity indicating the result of the operation.
      */
     @PostMapping("/forgot-password")
     public ResponseEntity<ApiResponse<String>> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
         log.info("PasswordResetController.forgotPassword() >> Entered for email: {}", request.getEmail());
-
         try {
-            String result = passwordResetService.requestPasswordReset(request.getEmail());
+            passwordResetService.requestPasswordReset(request.getEmail());
             ApiResponse<String> response = new ApiResponse<>(HttpStatus.OK.value(),
                     "Password reset email sent successfully. Please check your email.",
-                    result);
-
+                    null);
             log.info("PasswordResetController.forgotPassword() >> Exited successfully");
             return ResponseEntity.ok(response);
-
         } catch (Exception e) {
             log.error("Error during password reset process for email: {}", request.getEmail(), e);
             return new ResponseEntity<>(new ApiResponse<>(HttpStatus.INTERNAL_SERVER_ERROR.value(),
@@ -55,83 +48,32 @@ public class PasswordResetController {
     }
 
     /**
-     * Reset password method
-     * Validates temporary password and updates user password
-     * @param request
-     * @return
+     * Handles the request to reset the user's password using a temporary password.
+     * @param request The request containing the email, temporary password, and new password.
+     * @return A response entity indicating the result of the operation.
      */
     @PostMapping("/reset-password")
     public ResponseEntity<ApiResponse<String>> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         log.info("PasswordResetController.resetPassword() >> Entered for email: {}", request.getEmail());
-
         try {
-            // Validate temporary password
-            boolean isValidTempPassword = passwordResetService.validateTemporaryPassword(
+            passwordResetService.resetPassword(
                     request.getEmail(),
-                    request.getTemporaryPassword()
+                    request.getTemporaryPassword(),
+                    request.getNewPassword()
             );
-
-            if (!isValidTempPassword) {
-                log.warn("Invalid temporary password provided for email: {}", request.getEmail());
-                return new ResponseEntity<>(new ApiResponse<>(HttpStatus.BAD_REQUEST.value(),
-                        "Invalid or expired temporary password", null), HttpStatus.BAD_REQUEST);
-            }
-
-            // Check if new password is different from temporary password
-            if (request.getNewPassword().equals(request.getTemporaryPassword())) {
-                log.warn("New password same as temporary password for email: {}", request.getEmail());
-                return new ResponseEntity<>(new ApiResponse<>(HttpStatus.BAD_REQUEST.value(),
-                        "New password must be different from temporary password", null), HttpStatus.BAD_REQUEST);
-            }
-
-            // Change user password
-            userService.changePasswordForgot(request.getEmail(), request.getNewPassword());
-
-            // Clear temporary password from cache
-            passwordResetService.clearTemporaryPassword(request.getEmail());
-
             ApiResponse<String> response = new ApiResponse<>(HttpStatus.OK.value(),
                     "Password reset successfully. You can now login with your new password.",
-                    "Password updated successfully");
-
+                    null);
             log.info("PasswordResetController.resetPassword() >> Password reset successful for email: {}", request.getEmail());
             return ResponseEntity.ok(response);
-
+        } catch (IllegalArgumentException e) {
+            log.warn("Invalid password reset request for email: {}: {}", request.getEmail(), e.getMessage());
+            return new ResponseEntity<>(new ApiResponse<>(HttpStatus.BAD_REQUEST.value(),
+                    e.getMessage(), null), HttpStatus.BAD_REQUEST);
         } catch (Exception e) {
             log.error("Error during password reset for email: {}", request.getEmail(), e);
             return new ResponseEntity<>(new ApiResponse<>(HttpStatus.INTERNAL_SERVER_ERROR.value(),
                     "Failed to reset password. Please try again.", null), HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
-
-    /**
-     * Validate temporary password endpoint (optional - for frontend validation)
-     * @param email
-     * @param tempPassword
-     * @return
-     */
-    @GetMapping("/validate-temp-password")
-    public ResponseEntity<ApiResponse<Boolean>> validateTempPassword(
-            @RequestParam String email,
-            @RequestParam String tempPassword) {
-
-        log.info("PasswordResetController.validateTempPassword() >> Entered for email: {}", email);
-
-        try {
-            boolean isValid = passwordResetService.validateTemporaryPassword(email, tempPassword);
-
-            ApiResponse<Boolean> response = new ApiResponse<>(HttpStatus.OK.value(),
-                    isValid ? "Valid temporary password" : "Invalid temporary password",
-                    isValid);
-
-            log.info("PasswordResetController.validateTempPassword() >> Exited with result: {}", isValid);
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            log.error("Error validating temporary password for email: {}", email, e);
-            return new ResponseEntity<>(new ApiResponse<>(HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                    "Error validating temporary password", false), HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-    }
-
 }

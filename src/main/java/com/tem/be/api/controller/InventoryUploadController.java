@@ -121,4 +121,19 @@ public class InventoryUploadController {
         log.info("InventoryUploadController.searchInventories() >> Exited");
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Handles IllegalArgumentException specifically for this controller.
+     * Returns a 400 Bad Request response, which is appropriate for invalid client input.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<String>> handleIllegalArgumentException(IllegalArgumentException ex) {
+        log.warn("Bad Request during inventory search: {}", ex.getMessage());
+        ApiResponse<String> response = new ApiResponse<>(
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request", // Or keep "Processing Error" if you prefer
+                ex.getMessage()
+        );
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
 }

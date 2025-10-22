@@ -5,28 +5,24 @@ import com.tem.be.api.dao.TempFirstNetInvoiceDao;
 import com.tem.be.api.model.FirstNetInvoice;
 import com.tem.be.api.model.InvoiceHistory;
 import com.tem.be.api.model.TempFirstNetInvoice;
+import com.tem.be.api.utils.CarrierConstants;
+import lombok.AllArgsConstructor;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 @Component
+@AllArgsConstructor
 public class FirstNetApprovalStrategy implements ApprovalStrategy {
 
     private final TempFirstNetInvoiceDao tempRepo;
     private final FirstNetInvoiceDao finalRepo;
 
-    @Autowired
-    public FirstNetApprovalStrategy(TempFirstNetInvoiceDao tempRepo, FirstNetInvoiceDao finalRepo) {
-        this.tempRepo = tempRepo;
-        this.finalRepo = finalRepo;
-    }
-
     @Override
     public String getProviderName() {
-        return "FirstNet";
+        return CarrierConstants.FIRSTNET;
     }
 
     @Override

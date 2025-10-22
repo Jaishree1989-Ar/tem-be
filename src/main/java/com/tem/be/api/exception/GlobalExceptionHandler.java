@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.WebRequest;
 
+import javax.persistence.EntityNotFoundException;
+
 /**
  * Global exception handler to catch and handle exceptions across the entire application.
  */
@@ -58,5 +60,39 @@ public class GlobalExceptionHandler {
         log.error(ex.getMessage());
         ApiResponse<Object> response = new ApiResponse<>(HttpStatus.CONFLICT.value(), ex.getMessage(), null);
         return new ResponseEntity<>(response, HttpStatus.CONFLICT);
+    }
+
+    /**
+     * Handles IllegalArgumentException across all controllers.
+     * This is typically used for validation failures or bad client inputs.
+     * Returns a 400 Bad Request response.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<String>> handleIllegalArgumentException(IllegalArgumentException ex, WebRequest request) {
+        log.warn("Bad Request: {}", ex.getMessage());
+
+        ApiResponse<String> response = new ApiResponse<>(
+                HttpStatus.BAD_REQUEST.value(),
+                "Bad Request",
+                ex.getMessage()
+        );
+        return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * Handles EntityNotFoundException across all controllers.
+     * This is the standard exception thrown when a JPA repository's findById fails.
+     * Returns a 404 Not Found response.
+     */
+    @ExceptionHandler(EntityNotFoundException.class)
+    public ResponseEntity<ApiResponse<String>> handleEntityNotFoundException(EntityNotFoundException ex, WebRequest request) {
+        log.warn("Resource not found: {}", ex.getMessage());
+
+        ApiResponse<String> response = new ApiResponse<>(
+                HttpStatus.NOT_FOUND.value(),
+                "Not Found",
+                ex.getMessage()
+        );
+        return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
     }
 }

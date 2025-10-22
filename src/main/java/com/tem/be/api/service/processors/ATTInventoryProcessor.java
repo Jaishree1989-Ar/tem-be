@@ -6,6 +6,7 @@ import com.tem.be.api.model.InventoryHistory;
 import com.tem.be.api.model.TempATTInventory;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tem.be.api.utils.CarrierConstants;
 import lombok.extern.log4j.Log4j2;
 import org.apache.commons.text.CaseUtils;
 import org.springframework.stereotype.Component;
@@ -31,7 +32,7 @@ public class ATTInventoryProcessor implements InventoryProcessor<TempATTInventor
 
     @Override
     public String getProviderName() {
-        return "AT&T Mobility";
+        return CarrierConstants.ATT;
     }
 
     @Override

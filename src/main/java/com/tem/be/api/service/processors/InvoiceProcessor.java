@@ -25,7 +25,7 @@ public interface InvoiceProcessor<T extends TempInvoiceBase> {
      * @param filename The original name of the uploaded file.
      * @return A list of enriched temporary invoice entities ready for persistence.
      */
-    List<T> convertAndEnrichData(List<Map<String, String>> dataRows, InvoiceHistory history, String filename);
+    List<T> convertAndEnrichData(List<Map<String, String>> dataRows, InvoiceHistory history, String filename, Map<String, String> departmentMapping);
 
     /**
      * Saves a list of provider-specific temporary invoice entities to the database.

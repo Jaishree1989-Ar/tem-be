@@ -33,9 +33,12 @@ public class EmailServiceImpl implements EmailService {
     }
 
     @Override
-    public void sendEmail(String to, String subject, String body) {
+    public void sendEmail(String to, String subject, String body, boolean isHtml) {
         log.info("EmailServiceImpl.sendEmail() >> Entered for recipient: {}", to);
-
+        if (isHtml) {
+            sendHtmlEmail(to, subject, body);
+            return;
+        }
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setFrom(fromEmail);

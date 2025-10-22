@@ -31,6 +31,14 @@ public class InvoiceHistory {
     @JsonIgnore
     private List<TempFirstNetInvoice> tempInvoices = new ArrayList<>();
 
+    @OneToMany(mappedBy = "invoiceHistory", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonIgnore
+    private List<TempATTInvoice> tempATTInvoices = new ArrayList<>();
+
+    @OneToMany(mappedBy = "invoiceHistory", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonIgnore
+    private List<TempVerizonWirelessInvoice> tempVerizonInvoices = new ArrayList<>();
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status")
     private InvoiceStatus status;

@@ -9,6 +9,7 @@ import com.tem.be.api.exception.InvoiceProcessingException;
 import com.tem.be.api.model.*;
 import com.tem.be.api.service.processors.InvoiceProcessor;
 import com.tem.be.api.service.processors.InvoiceProcessorFactory;
+import com.tem.be.api.utils.CarrierConstants;
 import com.tem.be.api.utils.FileParsingUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.log4j.Log4j2;
@@ -43,11 +44,13 @@ public class InvoiceUploadServiceImpl implements InvoiceUploadService {
     private final FileParsingUtil fileParsingUtil;
     private final FirstNetInvoiceDao firstnetDao;
     private final ATTInvoiceDao attDao;
+    private final VerizonWirelessInvoiceDao verizonDao;
 
     private final InvoiceTransactionalService invoiceTransactionalService;
     private final InvoiceProcessorFactory invoiceProcessorFactory;
 
     private final InvoiceHistoryService invoiceHistoryService;
+    private final AccountDepartmentMappingService departmentMappingService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String NORMALIZED_KEY_DEPARTMENT = "department";
@@ -59,14 +62,17 @@ public class InvoiceUploadServiceImpl implements InvoiceUploadService {
 
     @Autowired
     public InvoiceUploadServiceImpl(FileParsingUtil fileParsingUtil, FirstNetInvoiceDao firstnetDao,
-                                    ATTInvoiceDao attDao,
+                                    ATTInvoiceDao attDao, VerizonWirelessInvoiceDao verizonDao,
                                     InvoiceHistoryService invoiceHistoryService,
                                     InvoiceTransactionalService invoiceTransactionalService,
+                                    AccountDepartmentMappingService departmentMappingService,
                                     InvoiceProcessorFactory invoiceProcessorFactory) {
         this.fileParsingUtil = fileParsingUtil;
         this.firstnetDao = firstnetDao;
         this.attDao = attDao;
+        this.verizonDao = verizonDao;
         this.invoiceHistoryService = invoiceHistoryService;
+        this.departmentMappingService = departmentMappingService;
         this.invoiceTransactionalService = invoiceTransactionalService;
         this.invoiceProcessorFactory = invoiceProcessorFactory;
     }
@@ -93,15 +99,20 @@ public class InvoiceUploadServiceImpl implements InvoiceUploadService {
         }
 
         return switch (carrier.toLowerCase()) {
-            case "firstnet" -> {
+            case CarrierConstants.FIRSTNET_LC -> {
                 Specification<FirstNetInvoice> spec = InvoiceSpecifications.findByCriteria(filter);
                 log.debug("Executing FirstNet invoice search with spec: {} and pageable: {}", spec, pageable);
                 yield firstnetDao.findAll(spec, pageable).map(Function.identity());
             }
-            case "at&t mobility" -> {
+            case CarrierConstants.ATT_LC -> {
                 Specification<ATTInvoice> spec = InvoiceSpecifications.findByCriteria(filter);
                 log.debug("Executing ATT invoice search with spec: {} and pageable: {}", spec, pageable);
                 yield attDao.findAll(spec, pageable).map(Function.identity());
+            }
+            case CarrierConstants.VERIZON_WIRELESS_LC -> {
+                Specification<VerizonWirelessInvoice> spec = InvoiceSpecifications.findByCriteria(filter);
+                log.debug("Executing Verizon Wireless invoice search with spec: {} and pageable: {}", spec, pageable);
+                yield verizonDao.findAll(spec, pageable).map(Function.identity());
             }
             default -> {
                 log.error("Unsupported carrier specified: {}", carrier);
@@ -113,17 +124,15 @@ public class InvoiceUploadServiceImpl implements InvoiceUploadService {
     @Override
     public DepartmentDistinctDTO getDistinctDepartments(String carrier) {
         List<String> departments;
-
-        // Use a simple if/else if block to select the correct DAO
-        if ("firstnet".equalsIgnoreCase(carrier)) {
+        if (CarrierConstants.FIRSTNET_LC.equalsIgnoreCase(carrier)) {
             departments = firstnetDao.findDistinctDepartments();
-        } else if ("at&t mobility".equalsIgnoreCase(carrier)) {
+        } else if (CarrierConstants.ATT_LC.equalsIgnoreCase(carrier)) {
             departments = attDao.findDistinctDepartments();
+        } else if (CarrierConstants.VERIZON_WIRELESS_LC.equalsIgnoreCase(carrier)) { // Add this
+            departments = verizonDao.findDistinctDepartments();
         } else {
-            // Handle the case where the carrier is not supported
             throw new IllegalArgumentException("Unsupported carrier: " + carrier);
         }
-
         return new DepartmentDistinctDTO(departments);
     }
 
@@ -295,32 +304,27 @@ public class InvoiceUploadServiceImpl implements InvoiceUploadService {
         log.info("Processing detail file '{}' for carrier '{}'", detailFile.getOriginalFilename(), carrier);
         String batchId = UUID.randomUUID().toString();
         String filename = detailFile.getOriginalFilename();
-
         if (filename == null) {
             throw new IllegalArgumentException("Filename cannot be null.");
         }
-
         // 1. Create initial history record
         InvoiceHistory history = createInitialHistory(batchId, carrier, uploadedBy, detailFile);
-
         try {
             // 2. Get the correct processor strategy for the given carrier
-            InvoiceProcessor processor = invoiceProcessorFactory.getProcessor(carrier);
+            InvoiceProcessor<?> processor = invoiceProcessorFactory.getProcessor(carrier);
             log.debug("Using processor: {}", processor.getClass().getSimpleName());
-
             // 3. Parse the file into a generic list of maps
             List<Map<String, String>> data = parseFile(filename, detailFile, carrier);
             if (data.isEmpty()) {
                 throw new IllegalArgumentException("The file is empty or contains no data rows.");
             }
-
+            Map<String, String> departmentMapping = departmentMappingService.getDepartmentMapping(carrier);
+            log.debug("Retrieved {} department mappings for carrier '{}'", departmentMapping.size(), carrier);
             // 4. Delegate conversion and enrichment to the selected processor
-            List<? extends TempInvoiceBase> tempInvoices = processor.convertAndEnrichData(data, history, filename);
-
+            List<? extends TempInvoiceBase> tempInvoices = processWithProcessor(processor, data, history, filename, departmentMapping);
             // 5. Delegate saving to the processor (it knows the correct repository)
-            processor.saveTempInvoices(tempInvoices);
+            saveTempInvoices(processor, tempInvoices);
             log.info("Successfully saved {} temporary invoice records for Batch ID: {}", tempInvoices.size(), batchId);
-
             return batchId;
         } catch (Exception e) {
             // 6. Mark history as FAILED on any exception
@@ -330,6 +334,23 @@ public class InvoiceUploadServiceImpl implements InvoiceUploadService {
             log.error("Processing failed for Batch ID: {}. Reason: {}", batchId, failureReason, e);
             throw new InvoiceProcessingException("Failed to process file for batch " + batchId, e);
         }
+    }
+
+    private <T extends TempInvoiceBase> List<T> processWithProcessor(
+            InvoiceProcessor<T> processor,
+            List<Map<String, String>> data,
+            InvoiceHistory history,
+            String filename,
+            Map<String, String> departmentMapping) {
+        return processor.convertAndEnrichData(data, history, filename, departmentMapping);
+    }
+
+    private <T extends TempInvoiceBase> void saveTempInvoices(
+            InvoiceProcessor<T> processor,
+            List<? extends TempInvoiceBase> tempInvoices) {
+        @SuppressWarnings("unchecked")
+        List<T> typedInvoices = (List<T>) tempInvoices;
+        processor.saveTempInvoices(typedInvoices);
     }
 
     private InvoiceHistory createInitialHistory(String batchId, String carrier, String uploadedBy, MultipartFile file) {
@@ -450,18 +471,24 @@ public class InvoiceUploadServiceImpl implements InvoiceUploadService {
         log.info("Attempting to update recurring charges | Invoice ID: {} | Carrier: {} | New Value: {}",
                 invoiceId, carrier, newRecurringCharges);
 
-        return switch (carrier.toUpperCase()) {
-            case "FIRSTNET" -> {
+        return switch (carrier.toLowerCase()) {
+            case CarrierConstants.FIRSTNET_LC -> {
                 FirstNetInvoice invoice = firstnetDao.findById(invoiceId)
                         .orElseThrow(() -> new EntityNotFoundException("FirstNetInvoice not found with ID: " + invoiceId));
                 invoice.setTotalReoccurringCharges(newRecurringCharges);
                 yield firstnetDao.save(invoice);
             }
-            case "AT&T MOBILITY" -> {
+            case CarrierConstants.ATT_LC -> {
                 ATTInvoice invoice = attDao.findById(invoiceId)
                         .orElseThrow(() -> new EntityNotFoundException("AttInvoice not found with ID: " + invoiceId));
                 invoice.setTotalReoccurringCharges(newRecurringCharges);
                 yield attDao.save(invoice);
+            }
+            case CarrierConstants.VERIZON_WIRELESS_LC -> {
+                VerizonWirelessInvoice invoice = verizonDao.findById(invoiceId)
+                        .orElseThrow(() -> new EntityNotFoundException("VerizonWirelessInvoice not found with ID: " + invoiceId));
+                invoice.setTotalReoccurringCharges(newRecurringCharges);
+                yield verizonDao.save(invoice);
             }
             default -> throw new IllegalArgumentException("Unsupported or unknown carrier: " + carrier);
         };

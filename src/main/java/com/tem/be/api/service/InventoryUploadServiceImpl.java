@@ -2,6 +2,7 @@ package com.tem.be.api.service;
 
 import com.tem.be.api.dao.inventory.ATTInventoryDao;
 import com.tem.be.api.dao.inventory.FirstNetInventoryDao;
+import com.tem.be.api.dao.inventory.VerizonWirelessInventoryDao;
 import com.tem.be.api.dto.DepartmentDistinctDTO;
 import com.tem.be.api.dto.InventoryFilterDto;
 import com.tem.be.api.enums.FileType;
@@ -10,6 +11,7 @@ import com.tem.be.api.exception.InventoryProcessingException;
 import com.tem.be.api.model.*;
 import com.tem.be.api.service.processors.InventoryProcessor;
 import com.tem.be.api.service.processors.InventoryProcessorFactory;
+import com.tem.be.api.utils.CarrierConstants;
 import com.tem.be.api.utils.FileParsingUtil;
 import lombok.extern.log4j.Log4j2;
 import org.hibernate.exception.ConstraintViolationException;
@@ -35,19 +37,21 @@ public class InventoryUploadServiceImpl implements InventoryUploadService {
     private final FileParsingUtil fileParsingUtil;
     private final FirstNetInventoryDao firstnetDao;
     private final ATTInventoryDao attDao;
+    private final VerizonWirelessInventoryDao verizonDao;
     private final AccountDepartmentMappingService departmentMappingService;
     private final InventoryProcessorFactory processorFactory;
 
     @Autowired
     public InventoryUploadServiceImpl(InventoryHistoryService inventoryHistoryService,
                                       FileParsingUtil fileParsingUtil, FirstNetInventoryDao firstnetDao,
-                                      ATTInventoryDao attDao,
+                                      ATTInventoryDao attDao, VerizonWirelessInventoryDao verizonDao,
                                       AccountDepartmentMappingService departmentMappingService,
                                       InventoryProcessorFactory processorFactory) {
         this.inventoryHistoryService = inventoryHistoryService;
         this.fileParsingUtil = fileParsingUtil;
         this.firstnetDao = firstnetDao;
         this.attDao = attDao;
+        this.verizonDao = verizonDao;
         this.departmentMappingService = departmentMappingService;
         this.processorFactory = processorFactory;
     }
@@ -113,7 +117,18 @@ public class InventoryUploadServiceImpl implements InventoryUploadService {
         } else if (filename.toLowerCase().endsWith(".xlsx")) {
             return fileParsingUtil.readXlsx(inputStream, carrier, FileType.INVENTORY);
         }
-        throw new IllegalArgumentException("Unsupported file type: " + filename.substring(filename.lastIndexOf(".")));
+
+        String extension = "";
+        int lastDotIndex = filename.lastIndexOf(".");
+        if (lastDotIndex >= 0 && lastDotIndex < filename.length() - 1) {
+            extension = filename.substring(lastDotIndex);
+        }
+
+        if (extension.isEmpty()) {
+            throw new IllegalArgumentException("Unsupported file type: The file has no extension.");
+        } else {
+            throw new IllegalArgumentException("Unsupported file type: " + extension);
+        }
     }
 
     /**
@@ -129,11 +144,12 @@ public class InventoryUploadServiceImpl implements InventoryUploadService {
         log.info("Fetching distinct inventory departments for carrier: {}", carrier);
         List<String> departments;
 
-        // Use if/else if block to select the correct DAO based on the carrier name
-        if ("firstnet".equalsIgnoreCase(carrier)) {
+        if (CarrierConstants.FIRSTNET_LC.equalsIgnoreCase(carrier)) {
             departments = firstnetDao.findDistinctDepartments();
-        } else if ("at&t mobility".equalsIgnoreCase(carrier)) {
+        } else if (CarrierConstants.ATT_LC.equalsIgnoreCase(carrier)) {
             departments = attDao.findDistinctDepartments();
+        } else if (CarrierConstants.VERIZON_WIRELESS_LC.equalsIgnoreCase(carrier)) { // Add this case
+            departments = verizonDao.findDistinctDepartments();
         } else {
             log.warn("Attempted to fetch departments for an unsupported carrier: {}", carrier);
             throw new IllegalArgumentException("Unsupported carrier for inventory departments: " + carrier);
@@ -165,15 +181,20 @@ public class InventoryUploadServiceImpl implements InventoryUploadService {
         }
 
         return switch (carrier.toLowerCase()) {
-            case "firstnet" -> {
+            case CarrierConstants.FIRSTNET_LC -> {
                 Specification<FirstNetInventory> spec = InventorySpecifications.findByCriteria(filter);
                 log.debug("Executing FirstNet inventory search with generic spec and pageable: {}", pageable);
                 yield firstnetDao.findAll(spec, pageable).map(Function.identity());
             }
-            case "at&t mobility" -> {
+            case CarrierConstants.ATT_LC -> {
                 Specification<ATTInventory> spec = InventorySpecifications.findByCriteria(filter);
                 log.debug("Executing AT&T Mobility inventory search with generic spec and pageable: {}", pageable);
                 yield attDao.findAll(spec, pageable).map(Function.identity());
+            }
+            case CarrierConstants.VERIZON_WIRELESS_LC -> {
+                Specification<VerizonWirelessInventory> spec = InventorySpecifications.findByCriteria(filter);
+                log.debug("Executing Verizon Wireless inventory search with spec and pageable: {}", pageable);
+                yield verizonDao.findAll(spec, pageable).map(Function.identity());
             }
             default -> {
                 log.error("Unsupported carrier specified: {}", carrier);

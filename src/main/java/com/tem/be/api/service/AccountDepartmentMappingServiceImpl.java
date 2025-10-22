@@ -2,14 +2,13 @@ package com.tem.be.api.service;
 
 import com.tem.be.api.dao.AccountDepartmentMappingDao;
 import com.tem.be.api.dto.AccountDepartmentMappingDTO;
+import com.tem.be.api.dto.MappingRow;
 import com.tem.be.api.exception.DuplicateResourceException;
 import com.tem.be.api.exception.ResourceNotFoundException;
 import com.tem.be.api.model.AccountDepartmentMapping;
+import com.tem.be.api.utils.CarrierConstants;
 import lombok.extern.log4j.Log4j2;
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -127,13 +126,22 @@ public class AccountDepartmentMappingServiceImpl implements AccountDepartmentMap
     }
 
     /**
-     * Processes a CSV or XLSX file to bulk-upload mappings, applying a single carrier to all.
+     * Uploads and processes department-account mappings from a CSV or XLSX file for a given carrier.
+     * <p>
+     * The method performs the following steps:
+     * <ul>
+     *   <li>Validates the uploaded file name.</li>
+     *   <li>Parses the file into a standardized list of {@link MappingRow} objects based on carrier type.</li>
+     *   <li>Filters out duplicate mappings that already exist in the database.</li>
+     *   <li>Maps the valid rows to {@link AccountDepartmentMapping} entities and saves them.</li>
+     * </ul>
      *
-     * @param file       The file containing mapping data (FAN, ACCOUNT #, DEPT).
-     * @param uploadedBy The identifier of the user uploading the file.
-     * @param carrier    The carrier to be associated with all records in the file.
-     * @return A list of the mappings created or updated from the file.
-     * @throws IOException if there is an error reading the file.
+     * @param file       the uploaded file (CSV or XLSX) containing mapping details
+     * @param uploadedBy the username of the person uploading the file
+     * @param carrier    the carrier type (e.g., AT&T, FirstNet, Verizon)
+     * @return a list of newly saved {@link AccountDepartmentMapping} entities
+     * @throws IOException              if there is an error reading the file
+     * @throws IllegalArgumentException if the file name is invalid or carrier is unsupported
      */
     @Override
     public List<AccountDepartmentMapping> uploadMappings(MultipartFile file, String uploadedBy, String carrier) throws IOException {
@@ -144,28 +152,29 @@ public class AccountDepartmentMappingServiceImpl implements AccountDepartmentMap
             throw new IllegalArgumentException("File name cannot be empty.");
         }
 
-        List<String[]> parsedData;
-        String fileSource;
+        List<MappingRow> parsedRows;
+        String fileSource = originalFilename.toLowerCase().endsWith(".csv") ? "CSV" : "XLSX";
 
-        // Step 1: Parse the file into a standardized List of String arrays
-        if (originalFilename.toLowerCase().endsWith(".csv")) {
-            parsedData = parseCsvFile(file);
-            fileSource = "CSV";
-        } else if (originalFilename.toLowerCase().endsWith(".xlsx")) {
-            parsedData = parseXlsxFile(file);
-            fileSource = "XLSX";
-        } else {
-            throw new IllegalArgumentException("Unsupported file type. Please upload a .csv or .xlsx file.");
+        // Step 1: Use a switch to select the correct parsing logic based on the carrier.
+        // The output of this step is a standardized List<MappingRow>.
+        parsedRows = switch (carrier.toLowerCase()) {
+            case CarrierConstants.FIRSTNET_LC, CarrierConstants.ATT_LC -> parseThreeColumnFile(file);
+            case CarrierConstants.VERIZON_WIRELESS_LC -> parseVerizonFile(file);
+            default ->
+                    throw new IllegalArgumentException("Unsupported carrier for department mapping upload: " + carrier);
+        };
+
+        if (parsedRows.isEmpty()) {
+            log.warn("No valid data rows found in file: {}", originalFilename);
+            return new ArrayList<>();
         }
 
-        // Step 2: Process the parsed data using a single, unified stream pipeline
-        List<AccountDepartmentMapping> mappingsToSave = parsedData.stream()
-                // ADD THIS LINE: Filter out any rows that don't have at least 3 columns
-                .filter(parts -> parts.length >= 3)
+        // Step 2: Process the standardized list of rows. This logic is now carrier-agnostic.
+        List<AccountDepartmentMapping> mappingsToSave = parsedRows.stream()
                 // Filter out records that are already active in the database
-                .filter(parts -> !isDuplicateInDb(parts[1], fileSource))
-                // Map the valid string arrays to AccountDepartmentMapping entities
-                .map(parts -> createMappingFromFileData(parts, uploadedBy, file, carrier))
+                .filter(row -> !isDuplicateInDb(row.getDepartmentAccountNumber(), fileSource))
+                // Map the valid MappingRow DTOs to AccountDepartmentMapping entities
+                .map(row -> createMappingFromRow(row, uploadedBy, file, carrier))
                 .toList();
 
         if (mappingsToSave.isEmpty()) {
@@ -179,40 +188,67 @@ public class AccountDepartmentMappingServiceImpl implements AccountDepartmentMap
     }
 
     /**
-     * Parses a CSV file into a list of string arrays.
+     * Parses a 3-column file (FirstNet, AT&T) into the standardized MappingRow DTO.
      */
-    private List<String[]> parseCsvFile(MultipartFile file) throws IOException {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
-            return reader.lines()
-                    .skip(1) // Skip header row
-                    .map(line -> line.split(","))
-                    .filter(parts -> parts.length >= 3) // Ensure row is not malformed
-                    .toList();
-        }
+    private List<MappingRow> parseThreeColumnFile(MultipartFile file) throws IOException {
+        List<String[]> data = readAllRows(file);
+        return data.stream()
+                .filter(parts -> parts.length >= 3)
+                .map(parts -> new MappingRow(
+                        parts[0].trim(), // FAN or Foundation Account
+                        parts[1].trim(), // Account # or Billing account number
+                        parts[2].trim()  // Department
+                ))
+                .toList();
     }
 
     /**
-     * Parses an XLSX file into a list of string arrays.
+     * Parses a 2-column file (Verizon) into the standardized MappingRow DTO.
      */
-    private List<String[]> parseXlsxFile(MultipartFile file) throws IOException {
-        try (Workbook workbook = new XSSFWorkbook(file.getInputStream())) {
-            Sheet sheet = workbook.getSheetAt(0);
-            return StreamSupport.stream(sheet.spliterator(), false)
-                    .skip(1) // Skip header row
-                    .map(this::mapRowToParts)
-                    .filter(Objects::nonNull) // Filter out empty or unmappable rows
-                    .toList();
+    private List<MappingRow> parseVerizonFile(MultipartFile file) throws IOException {
+        List<String[]> data = readAllRows(file);
+        return data.stream()
+                .filter(parts -> parts.length >= 2)
+                .map(parts -> new MappingRow(
+                        null,            // Verizon has no FAN in this file
+                        parts[0].trim(), // Account number
+                        parts[1].trim()  // Department
+                ))
+                .toList();
+    }
+
+    /**
+     * Generic file reader that detects file type and returns a List of String arrays.
+     */
+    private List<String[]> readAllRows(MultipartFile file) throws IOException {
+        String filename = file.getOriginalFilename();
+        if (filename == null) return Collections.emptyList();
+
+        if (filename.toLowerCase().endsWith(".csv")) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
+                return reader.lines().skip(1).map(line -> line.split(",(?=([^\"]*\"[^\"]*\")*[^\"]*$)")).toList(); // CSV-safe split
+            }
+        } else if (filename.toLowerCase().endsWith(".xlsx")) {
+            try (Workbook workbook = new XSSFWorkbook(file.getInputStream())) {
+                Sheet sheet = workbook.getSheetAt(0);
+                return StreamSupport.stream(sheet.spliterator(), false)
+                        .skip(1)
+                        .map(this::mapRowToStringArray)
+                        .filter(arr -> arr.length > 0)
+                        .toList();
+            }
+        } else {
+            throw new IllegalArgumentException("Unsupported file type. Please upload a .csv or .xlsx file.");
         }
     }
 
     /**
      * A helper method to check for duplicates and log a warning.
-     *
-     * @param deptAcctNum The department account number to check.
-     * @param fileSource  The source of the data (e.g., "CSV", "XLSX") for logging.
-     * @return true if the account number already exists for an active record.
      */
     private boolean isDuplicateInDb(String deptAcctNum, String fileSource) {
+        if (deptAcctNum == null || deptAcctNum.isBlank()) {
+            return true; // Skip rows with no account number
+        }
         if (mappingDao.existsByDepartmentAccountNumberAndIsDeletedFalse(deptAcctNum)) {
             log.warn("Skipping duplicate Account # '{}' from {} file", deptAcctNum, fileSource);
             return true;
@@ -221,29 +257,14 @@ public class AccountDepartmentMappingServiceImpl implements AccountDepartmentMap
     }
 
     /**
-     * Converts a POI Row object into a standard String array. Returns null for invalid rows.
+     * Creates an AccountDepartmentMapping entity from the standardized MappingRow DTO.
      */
-    private String[] mapRowToParts(Row row) {
-        String deptAcctNum = getCellStringValue(row.getCell(1));
-        if (deptAcctNum == null || deptAcctNum.isEmpty()) {
-            return new String[0];
-        }
-        String[] parts = new String[3];
-        parts[0] = getCellStringValue(row.getCell(0)); // FAN
-        parts[1] = deptAcctNum;                          // ACCOUNT #
-        parts[2] = getCellStringValue(row.getCell(2)); // DEPT
-        return parts;
-    }
-
-    /**
-     * Creates an AccountDepartmentMapping entity from parsed file data.
-     */
-    private AccountDepartmentMapping createMappingFromFileData(String[] parts, String uploadedBy, MultipartFile file, String carrier) {
+    private AccountDepartmentMapping createMappingFromRow(MappingRow row, String uploadedBy, MultipartFile file, String carrier) {
         AccountDepartmentMapping mapping = new AccountDepartmentMapping();
-        mapping.setFoundationAccountNumber(parts[0].trim());
-        mapping.setDepartmentAccountNumber(parts[1].trim());
-        mapping.setDepartment(parts[2].trim());
-        mapping.setCarrier(carrier); // Apply the carrier from the request parameter
+        mapping.setFoundationAccountNumber(row.getFoundationAccountNumber());
+        mapping.setDepartmentAccountNumber(row.getDepartmentAccountNumber());
+        mapping.setDepartment(row.getDepartment());
+        mapping.setCarrier(carrier);
         mapping.setUploadedBy(uploadedBy);
         mapping.setFileName(file.getOriginalFilename());
         mapping.setFileType(file.getContentType());
@@ -252,19 +273,31 @@ public class AccountDepartmentMappingServiceImpl implements AccountDepartmentMap
     }
 
     /**
-     * Safely retrieves the string value from a POI Cell, handling different cell types.
+     * Helper to convert an XLSX row to a string array.
+     */
+    private String[] mapRowToStringArray(Row row) {
+        if (row == null) return new String[0];
+        int lastCellNum = row.getLastCellNum();
+        if (lastCellNum <= 0) return new String[0];
+
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < lastCellNum; i++) {
+            parts.add(getCellStringValue(row.getCell(i)));
+        }
+
+        // Return only if the array contains non-blank data
+        if (parts.stream().allMatch(String::isBlank)) return new String[0];
+
+        return parts.toArray(new String[0]);
+    }
+
+    /**
+     * Safely retrieves the string value from a POI Cell.
      */
     private String getCellStringValue(Cell cell) {
         if (cell == null) return "";
-        switch (cell.getCellType()) {
-            case STRING:
-                return cell.getStringCellValue().trim();
-            case NUMERIC:
-                // Format as a whole number string to avoid scientific notation like "1.23E11"
-                return String.format("%.0f", cell.getNumericCellValue());
-            default:
-                return "";
-        }
+        DataFormatter formatter = new DataFormatter();
+        return formatter.formatCellValue(cell).trim();
     }
 
     @Override
